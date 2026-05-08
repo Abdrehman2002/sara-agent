@@ -1,0 +1,8 @@
+livekit-agents[deepgram,openai,silero,elevenlabs]>=1.5.0
+livekit-plugins-turn-detector>=1.5.0
+livekit-plugins-noise-cancellation>=1.5.0
+aiohttp>=3.9.0
+python-dotenv>=1.0.0
+pydantic-settings>=2.0.0
+huggingface-hub>=0.23.0
+openai>=1.30.0

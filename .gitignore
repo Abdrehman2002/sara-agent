@@ -1,0 +1,24 @@
+# Secrets — never commit the real .env
+.env
+.env.local
+.env.production
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.Python
+venv/
+.venv/
+env/
+
+# HuggingFace model cache (large — downloaded at runtime or build time)
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  sara-agent:
+    build: .
+    image: sara-agent:latest
+    container_name: sara-agent
+    restart: unless-stopped          # auto-restart on crash or VPS reboot
+    env_file: .env                   # all secrets from .env file
+    environment:
+      # Override DASHBOARD_URL here if your dashboard is on a different host
+      - DASHBOARD_URL=${DASHBOARD_URL:-http://localhost:3000}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import livekit.agents; print('ok')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
