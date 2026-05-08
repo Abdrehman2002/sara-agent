@@ -555,5 +555,6 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
+            agent_name="sara",   # matches AgentDispatchClient.createDispatch(room, "sara")
         )
     )
