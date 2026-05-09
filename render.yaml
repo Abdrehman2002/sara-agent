@@ -1,0 +1,27 @@
+services:
+  - type: worker           # background process — no HTTP port needed
+    name: sara-agent
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeploy: true
+
+    envVars:
+      - key: LIVEKIT_URL
+        sync: false        # fill in Render dashboard
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        value: 6wMF5aBsi9xsISTPVsWw
+      - key: DASHBOARD_URL
+        sync: false        # set to your Render dashboard URL after it deploys
+      - key: CRM_WEBHOOK_URL
+        sync: false        # optional — leave blank to disable
