@@ -1,0 +1,22 @@
+app            = "sara-agent"
+primary_region = "sin"          # Singapore — lowest latency for Pakistan
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Background worker — no HTTP server, just the LiveKit connection
+[processes]
+  agent = "python agent.py start"
+
+[[vm]]
+  memory   = "512mb"    # Silero VAD + HuggingFace model need ~400 MB
+  cpu_kind = "shared"
+  cpus     = 1
+
+# Keep exactly one instance running at all times
+[http_service]
+  # No HTTP service — comment out entirely so Fly doesn't add a proxy
+  force_https = false
+
+[checks]
+  # No HTTP healthcheck — Fly monitors the process directly
