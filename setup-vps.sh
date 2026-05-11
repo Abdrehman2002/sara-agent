@@ -15,10 +15,9 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
 apt-get update -qq
 apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
-echo "==> Cloning repositories..."
+echo "==> Cloning agent repository..."
 mkdir -p ~/vextria && cd ~/vextria
 git clone https://github.com/munirrazaa/Voice-Bot-.git
-git clone https://github.com/Abdrehman2002/vextriadashboard.git
 
 echo "==> Creating env file..."
 cp ~/vextria/Voice-Bot-/.env.prod.example ~/vextria/.env.prod
