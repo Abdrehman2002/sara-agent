@@ -314,7 +314,7 @@ READING CODES — VERY IMPORTANT: Whenever you say a ticket number, seat number,
 - Never say AA for the letter A. Say A once, clearly.
 - Never add extra Urdu words around a code.
 
-NAME CAPTURE RULE — When a caller gives their name, immediately repeat it back to confirm: 'Aap ka naam [name] hai, sahi hai?' If the name is unclear, ask them to spell it: 'Zaroor, aap apna naam spell kar sakte hain?' Do not move on until the name is confirmed.
+NAME CAPTURE RULE — When a caller gives ANY name (even just a first name), accept it immediately and move on. Do NOT insist on a full name. Do NOT keep asking for more. Just say 'Shukriya [name] sahab/ji' and continue. If the name is completely inaudible or unclear, ask once: 'Zaroor, aap apna naam bata sakte hain?' but never ask more than once. A single name, a nickname, anything they give — accept it and proceed.
 
 NO PHONE NUMBER RULE — Do NOT ask the caller for their phone number. You already have it from the incoming call. Never ask for it, never repeat it back.
 
@@ -327,7 +327,7 @@ NUMBER READING RULE — Always say ALL numbers in English. Never translate numbe
 COMPLAINT FLOW — Follow this exact sequence:
 Step 1 - OPENING: Greet the caller warmly as Sara from Daewoo Express. Ask how you can help. Keep it short and natural.
 Step 2 - ACKNOWLEDGE + CATEGORIZE: Acknowledge their frustration genuinely — one sentence. Identify complaint type: bus_delay, staff_behavior, ticket_issue, refund, or luggage. If unclear, ask one question. Do not collect details yet.
-Step 3 - COLLECT NAME: Ask for their full name naturally. Once given, repeat back: 'Aap ka naam [name] hai, sahi hai?' Only proceed when confirmed.
+Step 3 - COLLECT NAME: Ask for their name naturally. Accept whatever they give — first name, full name, anything. Do NOT ask for a full name. Do NOT wait for confirmation. Just acknowledge it and move on immediately to Step 4.
 Step 4 - COLLECT DETAILS: Ask them to describe exactly what happened. If travel-related, ask for route or date if not mentioned. One question at a time.
 Step 5 - CONFIRM DETAILS: Read back everything — name, complaint type, description. Do NOT mention phone number. Ask for confirmation.
 Step 6 - SUBMIT: Tell them you are registering their complaint now and ask them to hold a moment. Then call the complaint() function.
@@ -461,8 +461,8 @@ class DaewooAgent(Agent):
 
 def build_llm():
     return llm.FallbackAdapter([
-        lk_openai.LLM(model="gpt-4.1-nano"),  # Fastest TTFT (~150-300ms) — sufficient for ticket lookup + complaints
-        lk_openai.LLM(model="gpt-4o-mini"),   # Fallback
+        lk_openai.LLM(model="gpt-4o"),       # Best quality for natural Urdu conversation
+        lk_openai.LLM(model="gpt-4o-mini"),  # Fallback
     ])
 
 
@@ -478,18 +478,18 @@ def build_stt():
 
 def build_tts():
     if ELEVENLABS_API_KEY:
-        logger.info("TTS: ElevenLabs flash_v2_5 → turbo_v2_5 → OpenAI nova")
+        logger.info("TTS: ElevenLabs multilingual_v2 → turbo_v2_5 → OpenAI nova")
         return tts.FallbackAdapter([
-            # flash_v2_5: ~75ms TTFB — 4x faster than turbo, still multilingual
+            # multilingual_v2: highest quality, best Urdu pronunciation
             elevenlabs.TTS(
                 voice_id=ELEVENLABS_VOICE_ID,
-                model="eleven_flash_v2_5",
+                model="eleven_multilingual_v2",
                 api_key=ELEVENLABS_API_KEY,
                 enable_ssml_parsing=True,
                 voice_settings=elevenlabs.VoiceSettings(
-                    stability=0.45,
-                    similarity_boost=0.75,
-                    style=0.20,
+                    stability=0.50,
+                    similarity_boost=0.80,
+                    style=0.25,
                     use_speaker_boost=True,
                 ),
             ),
