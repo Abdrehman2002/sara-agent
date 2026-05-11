@@ -752,6 +752,6 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
-            # No agent_name — auto-dispatch mode: Sara picks up any new room automatically
+            agent_name="sara",
         )
     )
