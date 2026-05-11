@@ -8,7 +8,7 @@ from typing import Annotated
 import aiohttp
 from dotenv import load_dotenv
 
-from livekit import agents
+from livekit import agents, api as lk_server_api
 from livekit.agents import (
     AgentSession,
     Agent,
@@ -60,6 +60,29 @@ DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://localhost:3000")
 # Leave blank to skip. Payload is a flat JSON object with all 9 post-call fields.
 CRM_WEBHOOK_URL = os.getenv("CRM_WEBHOOK_URL", "")
 
+# ── Recording / Egress ────────────────────────────────────────────────────────
+# LiveKit Egress writes the audio file to S3-compatible storage (AWS S3, Cloudflare R2, etc.)
+# Leave RECORDING_S3_BUCKET empty to disable recordings.
+#
+# Cloudflare R2 example:
+#   RECORDING_S3_BUCKET    = my-recordings
+#   RECORDING_S3_REGION    = auto
+#   RECORDING_S3_KEY       = <R2 Access Key ID>
+#   RECORDING_S3_SECRET    = <R2 Secret Access Key>
+#   RECORDING_S3_ENDPOINT  = https://<account_id>.r2.cloudflarestorage.com
+#   RECORDING_PUBLIC_BASE  = https://recordings.yourdomain.com   (or R2 public bucket URL)
+
+LIVEKIT_HTTP_URL       = os.getenv("LIVEKIT_URL", "").replace("wss://", "https://").replace("ws://", "http://")
+LIVEKIT_API_KEY        = os.getenv("LIVEKIT_API_KEY", "")
+LIVEKIT_API_SECRET     = os.getenv("LIVEKIT_API_SECRET", "")
+
+RECORDING_S3_BUCKET    = os.getenv("RECORDING_S3_BUCKET", "")
+RECORDING_S3_REGION    = os.getenv("RECORDING_S3_REGION", "auto")
+RECORDING_S3_KEY       = os.getenv("RECORDING_S3_KEY", "")
+RECORDING_S3_SECRET    = os.getenv("RECORDING_S3_SECRET", "")
+RECORDING_S3_ENDPOINT  = os.getenv("RECORDING_S3_ENDPOINT", "")   # e.g. https://xxxx.r2.cloudflarestorage.com
+RECORDING_PUBLIC_BASE  = os.getenv("RECORDING_PUBLIC_BASE", "")   # public base URL (no trailing slash)
+
 
 # ── 1 · Phone capture ─────────────────────────────────────────────────────────
 
@@ -107,7 +130,66 @@ def get_caller_phone(ctx: JobContext) -> str | None:
     return None
 
 
-# ── 2 · Ticket data ───────────────────────────────────────────────────────────
+# ── 2 · Call recording helpers ───────────────────────────────────────────────
+
+async def start_recording(room_name: str, filepath: str) -> str | None:
+    """
+    Start a LiveKit Room Composite Egress (audio-only OGG) for the given room.
+    Returns the egress_id to pass to stop_recording(), or None if not configured.
+    """
+    if not RECORDING_S3_BUCKET:
+        logger.info("Recording: RECORDING_S3_BUCKET not set — skipping")
+        return None
+    try:
+        lkapi = lk_server_api.LiveKitAPI(
+            url=LIVEKIT_HTTP_URL,
+            api_key=LIVEKIT_API_KEY,
+            api_secret=LIVEKIT_API_SECRET,
+        )
+        s3 = lk_server_api.S3Upload(
+            access_key=RECORDING_S3_KEY,
+            secret=RECORDING_S3_SECRET,
+            bucket=RECORDING_S3_BUCKET,
+            region=RECORDING_S3_REGION,
+            endpoint=RECORDING_S3_ENDPOINT,  # empty string = AWS; set for R2/B2/Minio
+        )
+        info = await lkapi.egress.start_room_composite_egress(
+            lk_server_api.StartRoomCompositeEgressRequest(
+                room_name=room_name,
+                audio_only=True,
+                file_outputs=[lk_server_api.EncodedFileOutput(
+                    file_type=lk_server_api.EncodedFileType.OGG,
+                    filepath=filepath,
+                    s3=s3,
+                )],
+            )
+        )
+        await lkapi.aclose()
+        logger.info(f"Recording started → egress_id={info.egress_id}  file={filepath}")
+        return info.egress_id
+    except Exception as e:
+        logger.error(f"start_recording failed: {e}")
+        return None
+
+
+async def stop_recording(egress_id: str) -> None:
+    """Stop a running egress. Call this in on_shutdown before pushing metrics."""
+    try:
+        lkapi = lk_server_api.LiveKitAPI(
+            url=LIVEKIT_HTTP_URL,
+            api_key=LIVEKIT_API_KEY,
+            api_secret=LIVEKIT_API_SECRET,
+        )
+        await lkapi.egress.stop_egress(
+            lk_server_api.StopEgressRequest(egress_id=egress_id)
+        )
+        await lkapi.aclose()
+        logger.info(f"Recording stopped → egress_id={egress_id}")
+    except Exception as e:
+        logger.error(f"stop_recording failed: {e}")
+
+
+# ── 3 · Ticket data ───────────────────────────────────────────────────────────
 
 async def fetch_tickets() -> str:
     """Fetch live ticket records from the dashboard API and format for system prompt."""
@@ -115,7 +197,7 @@ async def fetch_tickets() -> str:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 f"{DASHBOARD_URL}/api/livekit-tickets",
-                timeout=aiohttp.ClientTimeout(total=10),
+                timeout=aiohttp.ClientTimeout(total=3),  # 3s max — fall back to hardcoded if Vercel is slow
             ) as resp:
                 if resp.status == 200:
                     tickets = await resp.json()
@@ -194,20 +276,16 @@ def build_system_prompt(ticket_records: str) -> str:
 
 FORMATTING RULE — CRITICAL: You are speaking out loud. Never use bullet points, numbered lists, hyphens, asterisks, dashes, or any markdown formatting whatsoever. Never write lists. Always speak in natural, flowing, complete sentences the way a real person would talk. If you need to mention multiple things, connect them with words like "aur", "phir", "pehle" — never with hyphens or bullet points.
 
-SPEAK like a modern Pakistani woman — the natural mix of Roman Urdu and English that educated Pakistanis actually use in daily conversation. Think of how a young professional in Lahore or Karachi would speak on the phone. Short turns, warm, confident, never robotic.
+LANGUAGE STYLE — CRITICAL: Speak in simple, everyday Urdu script. Not formal or heavy Urdu — simple conversational Urdu that anyone can understand. Write ALL Urdu words in Urdu script. The only words you may keep in English are technical terms that have no Urdu equivalent: ticket, booking, complaint, bus, route, seat, status, refund, delay, confirm, cancel, register. All other words must be in Urdu script.
 
-LANGUAGE STYLE — THIS IS HOW YOU SHOULD SOUND:
-Speak in Roman Urdu mixed with English naturally. For example: "Ji bilkul, main abhi aap ki booking check karti hoon." or "Acha, toh problem ye hai ke bus delay ho gayi — sahi hai?" or "No worries, main abhi complaint register kar deti hoon." Mix languages the way real Pakistanis do — don't force pure Urdu, don't speak pure English.
+EXAMPLES OF HOW YOU SHOULD SOUND:
+- "جی، آپ کی booking confirm ہے۔ bus on time ہے۔"
+- "اچھا، تو آپ complaint register کرنا چاہتے ہیں؟"
+- "بالکل، میں ابھی آپ کی مدد کرتی ہوں۔"
+- "آپ کا نام کیا ہے؟"
+- "ٹھیک ہے، میں نے سمجھ لیا۔"
 
-PRONUNCIATION RULE — CRITICAL: For these specific Urdu filler words, always write them in Urdu script so ElevenLabs pronounces them correctly:
-- Write جی not "ji" or "jee"
-- Write ہاں not "haan"
-- Write اچھا not "acha" or "achha"
-- Write بالکل not "bilkul"
-- Write شکریہ not "shukriya"
-- Write ٹھیک ہے not "theek hai"
-- Write سنیں not "sunn" or "suno"
-For all other words, Roman Urdu and English are fine.
+Keep sentences short and simple. Warm and natural, never stiff or formal.
 
 Use natural fillers like "جی...", "okay so...", "acha...", "right...", "ہاں bilkul..." to show you are present. Never ask two questions at once. React to what they say before moving on.
 
@@ -221,7 +299,7 @@ TWO MODES — UNDERSTAND THIS CLEARLY:
 
 2. COMPLAINT MODE — Use this when the caller has a problem they want to report: a bad experience, rude staff, refund request, lost luggage, or something that went wrong. In this case — follow the complaint flow: acknowledge, categorize, collect name, details, confirm, and submit.
 
-IF THE CALLER'S INTENT IS UNCLEAR — ask one simple question naturally: 'Aap apni booking check karwani hai, ya koi complaint register karni hai?'
+IF THE CALLER'S INTENT IS UNCLEAR — ask one simple question: 'آپ اپنی booking check کرنا چاہتے ہیں، یا کوئی complaint درج کرنی ہے؟'
 
 TICKET RECORDS — search by name OR ticket number:
 
@@ -262,7 +340,7 @@ GLOBAL BEHAVIORS (can happen at any point in the conversation):
 - CALLER CONFUSED: Simplify immediately. Rephrase in the plainest Urdu possible. Give a short example if helpful. One thing at a time."""
 
 
-# ── 3 · Post-call analysis ────────────────────────────────────────────────────
+# ── 4 · Post-call analysis ────────────────────────────────────────────────────
 
 ANALYSIS_PROMPT = """You are a call analytics engine. Analyze the transcript and return a JSON object with EXACTLY these fields:
 - outcome: one of "complaint_filed", "ticket_inquiry", "both", "abandoned", "other"
@@ -300,7 +378,7 @@ async def analyze_call(transcript: str) -> dict:
         return {}
 
 
-# ── 3 · CRM push ─────────────────────────────────────────────────────────────
+# ── 5 · CRM push ─────────────────────────────────────────────────────────────
 
 async def push_to_crm(payload: dict) -> None:
     """POST complaint + call data to external CRM. Only runs if CRM_WEBHOOK_URL is set."""
@@ -335,8 +413,8 @@ class DaewooAgent(Agent):
     async def on_enter(self) -> None:
         # Use say() instead of generate_reply() — speaks instantly without LLM round trip
         await self.session.say(
-            "جی السلام علیکم! Main Sara hoon Daewoo Express ki taraf se. "
-            "Aap ki kya madad kar sakti hoon — booking check karni hai ya koi complaint?"
+            "السلام علیکم! میں سارہ ہوں، Daewoo Express کی طرف سے۔ "
+            "آپ کی کیا مدد کر سکتی ہوں — booking check کرنی ہے یا کوئی complaint؟"
         )
 
     @function_tool
@@ -383,35 +461,44 @@ class DaewooAgent(Agent):
 
 def build_llm():
     return llm.FallbackAdapter([
-        lk_openai.LLM(model="gpt-4o"),
-        lk_openai.LLM(model="gpt-4o-mini"),
+        lk_openai.LLM(model="gpt-4.1-nano"),  # Fastest TTFT (~150-300ms) — sufficient for ticket lookup + complaints
+        lk_openai.LLM(model="gpt-4o-mini"),   # Fallback
     ])
 
 
 def build_stt():
     return deepgram.STT(
         model="nova-3",
-        language="multi",
+        language="ur",          # Urdu only — faster than multi-language detection
         punctuate=True,
         interim_results=True,
+        endpointing=200,        # ms of silence before Deepgram finalises — default 500ms
     )
 
 
 def build_tts():
     if ELEVENLABS_API_KEY:
-        logger.info("TTS: ElevenLabs multilingual_v2 → OpenAI nova fallback")
+        logger.info("TTS: ElevenLabs flash_v2_5 → turbo_v2_5 → OpenAI nova")
         return tts.FallbackAdapter([
+            # flash_v2_5: ~75ms TTFB — 4x faster than turbo, still multilingual
             elevenlabs.TTS(
                 voice_id=ELEVENLABS_VOICE_ID,
-                model="eleven_multilingual_v2",
+                model="eleven_flash_v2_5",
                 api_key=ELEVENLABS_API_KEY,
-                # SSML enabled so <break> tags produce real pauses
                 enable_ssml_parsing=True,
-                # Voice tuning for natural South Asian conversational tone:
-                # stability 0.45 → natural emotional range (not robotic)
-                # similarity_boost 0.75 → stays true to the voice's accent
-                # style 0.20 → slight expressiveness for warmth
-                # use_speaker_boost → sharpens clarity on phone-quality audio
+                voice_settings=elevenlabs.VoiceSettings(
+                    stability=0.45,
+                    similarity_boost=0.75,
+                    style=0.20,
+                    use_speaker_boost=True,
+                ),
+            ),
+            # turbo_v2_5 as fallback (~300ms TTFB)
+            elevenlabs.TTS(
+                voice_id=ELEVENLABS_VOICE_ID,
+                model="eleven_turbo_v2_5",
+                api_key=ELEVENLABS_API_KEY,
+                enable_ssml_parsing=True,
                 voice_settings=elevenlabs.VoiceSettings(
                     stability=0.45,
                     similarity_boost=0.75,
@@ -427,8 +514,8 @@ def build_tts():
 
 def prewarm(proc: agents.JobProcess):
     proc.userdata["vad"] = silero.VAD.load(
-        min_silence_duration=0.15,   # default ~0.55s — 0.15s = very fast response
-        activation_threshold=0.4,    # default 0.5 — more sensitive to speech
+        min_silence_duration=0.2,    # 200ms — snappier without cutting off speech
+        activation_threshold=0.25,   # lower = more sensitive (good for WebRTC)
     )
 
 
@@ -470,6 +557,10 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(**session_kwargs)
 
+    # ── Recording state (set after session.start; read in on_shutdown) ──────────
+    recording_egress_id: str | None = None
+    recording_filepath:  str | None = None
+
     # ── Metrics listeners ─────────────────────────────────────────────────────
     usage_collector = metrics.UsageCollector()
     last_eou: metrics.EOUMetrics | None = None
@@ -499,12 +590,24 @@ async def entrypoint(ctx: JobContext):
             if ms > 1000:
                 logger.warning(f"TTFA {ms:.0f}ms exceeded 1 s target")
 
-    # ── Shutdown: transcript → GPT analysis → PATCH complaint → CRM → metrics ─
+    # ── Shutdown: stop recording → transcript → GPT analysis → PATCH → CRM → metrics ─
     async def on_shutdown():
+        nonlocal recording_egress_id, recording_filepath
         call_end    = datetime.now(timezone.utc)
         duration_s  = int((call_end - call_start).total_seconds())
         summary     = usage_collector.get_summary()
         # sara is captured from the entrypoint closure — session.agent doesn't exist in 1.5.x
+
+        # Stop egress recording ────────────────────────────────────────────────
+        recording_url: str | None = None
+        if recording_egress_id:
+            await stop_recording(recording_egress_id)
+            # Give LiveKit ~2s to finalize the file before we push metrics
+            import asyncio as _asyncio
+            await _asyncio.sleep(2)
+            if RECORDING_PUBLIC_BASE and recording_filepath:
+                recording_url = f"{RECORDING_PUBLIC_BASE.rstrip('/')}/{recording_filepath}"
+                logger.info(f"Recording URL: {recording_url}")
 
         # Build transcript ────────────────────────────────────────────────────
         lines = []
@@ -598,6 +701,7 @@ async def entrypoint(ctx: JobContext):
                 "resolved", "language", "notes",
             )},
             "transcript":    transcript,
+            "recording_url": recording_url,   # None if egress not configured
         }
         try:
             async with aiohttp.ClientSession() as http:
@@ -619,8 +723,10 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(on_shutdown)
 
     # ── Start ─────────────────────────────────────────────────────────────────
+    # BVC noise cancellation is designed for SIP/telephony — it over-filters WebRTC
+    # mic audio and causes Sara to hear silence. Disabled for web call compatibility.
     room_input = RoomInputOptions(
-        noise_cancellation=BVC() if NOISE_CANCELLATION else None
+        noise_cancellation=None
     )
 
     sara = DaewooAgent(system_prompt=system_prompt, caller_phone=caller_phone)
@@ -631,6 +737,14 @@ async def entrypoint(ctx: JobContext):
         room_input_options=room_input,
     )
     # on_enter() handles the greeting via say() — no second generate_reply() needed
+
+    # ── Start call recording via LiveKit Egress ───────────────────────────────
+    # Filename: daewoo/YYYYMMDD-HHMMSS-<room8>.ogg (stored in your S3/R2 bucket)
+    if RECORDING_S3_BUCKET:
+        ts = call_start.strftime("%Y%m%d-%H%M%S")
+        room_slug = ctx.room.name[:8].replace("/", "-")
+        recording_filepath = f"daewoo/{ts}-{room_slug}.ogg"
+        recording_egress_id = await start_recording(ctx.room.name, recording_filepath)
 
 
 if __name__ == "__main__":
