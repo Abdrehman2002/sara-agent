@@ -321,11 +321,10 @@ class DaewooAgent(Agent):
         self._complaint_data: dict | None = None
 
     async def on_enter(self) -> None:
-        await self.session.generate_reply(
-            instructions=(
-                "Greet the caller warmly and briefly as Sara from Daewoo Express Pakistan. "
-                "Ask how you can help — ticket inquiry or complaint. Keep it to 1–2 sentences."
-            )
+        # Use say() instead of generate_reply() — speaks instantly without LLM round trip
+        await self.session.say(
+            "جی السلام علیکم! Main Sara hoon Daewoo Express ki taraf se. "
+            "Aap ki kya madad kar sakti hoon — booking check karni hai ya koi complaint?"
         )
 
     @function_tool
@@ -416,8 +415,8 @@ def build_tts():
 
 def prewarm(proc: agents.JobProcess):
     proc.userdata["vad"] = silero.VAD.load(
-        min_silence_duration=0.25,   # default ~0.55s — shorter = faster response
-        activation_threshold=0.4,    # default 0.5 — more sensitive to speech start/end
+        min_silence_duration=0.15,   # default ~0.55s — 0.15s = very fast response
+        activation_threshold=0.4,    # default 0.5 — more sensitive to speech
     )
 
 
@@ -448,8 +447,8 @@ async def entrypoint(ctx: JobContext):
     # Faster turn detection — respond sooner after user stops speaking
     if HAS_TURN_HANDLING:
         session_kwargs["turn_handling"] = TurnHandlingOptions(
-            min_delay=0.3,   # wait only 0.3s of silence before responding (default 0.5s)
-            max_delay=2.0,   # never wait more than 2s (default 3.0s)
+            min_delay=0.1,   # near-instant response after speech ends
+            max_delay=1.5,   # cap wait at 1.5s
         )
 
     if MULTILINGUAL_TURN_DETECTION:
@@ -618,8 +617,7 @@ async def entrypoint(ctx: JobContext):
         agent=sara,
         room_input_options=room_input,
     )
-
-    await session.generate_reply()
+    # on_enter() handles the greeting via say() — no second generate_reply() needed
 
 
 if __name__ == "__main__":
