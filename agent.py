@@ -472,7 +472,6 @@ def build_stt():
         language="ur",          # Urdu only — faster than multi-language detection
         punctuate=True,
         interim_results=True,
-        endpointing=200,        # ms of silence before Deepgram finalises — default 500ms
     )
 
 
