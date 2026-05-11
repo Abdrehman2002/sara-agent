@@ -151,31 +151,42 @@ async def fetch_tickets() -> str:
     )
 
 
-# ── TTS text sanitizer ────────────────────────────────────────────────────────
+# ── Pronunciation fix: Roman Urdu → Urdu script before ElevenLabs ────────────
+# ElevenLabs mispronounces Roman Urdu words as English.
+# This map converts the most common ones to proper Urdu script.
+# Add any new mispronounced word here as: (r'\bword\b', 'اردو')
 
-def _sanitize_tts_text(text: str) -> str:
+_PRONUNCIATION_MAP = [
+    (r'\bsunn\b',       'سنیں'),
+    (r'\bsuno\b',       'سنو'),
+    (r'\bji\b',         'جی'),
+    (r'\bhaan\b',       'ہاں'),
+    (r'\bhan\b',        'ہاں'),
+    (r'\bacha\b',       'اچھا'),
+    (r'\bachha\b',      'اچھا'),
+    (r'\bbilkul\b',     'بالکل'),
+    (r'\bshukriya\b',   'شکریہ'),
+    (r'\bshukria\b',    'شکریہ'),
+    (r'\btheek\b',      'ٹھیک'),
+    (r'\bnahi\b',       'نہیں'),
+    (r'\bnahin\b',      'نہیں'),
+    (r'\bzaroor\b',     'ضرور'),
+    (r'\bkripya\b',     'کرپیا'),
+    (r'\bforan\b',      'فوراً'),
+    (r'\babhi\b',       'ابھی'),
+    (r'\bphir\b',       'پھر'),
+]
+
+async def _fix_pronunciation(text_stream):
     """
-    Strip markdown and inject SSML <break> tags so ElevenLabs pauses naturally.
-    Called automatically before every TTS synthesis via tts_text_transforms.
+    Async generator — correct form for tts_text_transforms in livekit-agents 1.5+.
+    Replaces Roman Urdu words with Urdu script so ElevenLabs pronounces them right.
     """
-    # Remove bullet points and list markers (- item, * item, • item, 1. item)
-    text = re.sub(r'^\s*[-*•]\s+', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^\s*\d+[.)]\s+', '', text, flags=re.MULTILINE)
-    # Remove bold / italic markdown (**word**, *word*, __word__)
-    text = re.sub(r'\*{1,3}([^*\n]+)\*{1,3}', r'\1', text)
-    text = re.sub(r'_{1,2}([^_\n]+)_{1,2}', r'\1', text)
-    # Remove markdown headers (## Heading)
-    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
-    # Remove backtick code markers
-    text = re.sub(r'`+([^`]+)`+', r'\1', text)
-    # Inject SSML pauses at natural speech boundaries
-    text = re.sub(r'([,،])\s+', r'\1 <break time="200ms"/> ', text)   # comma
-    text = re.sub(r'([.!?])\s+', r'\1 <break time="400ms"/> ', text)  # sentence end
-    text = re.sub(r'\s*—\s*', ' <break time="300ms"/> ', text)        # em-dash
-    text = re.sub(r'\s+-\s+', ' <break time="200ms"/> ', text)        # spaced hyphen
-    # Clean up extra whitespace
-    text = ' '.join(text.split())
-    return text
+    async for chunk in text_stream:
+        fixed = chunk
+        for pattern, replacement in _PRONUNCIATION_MAP:
+            fixed = re.sub(pattern, replacement, fixed, flags=re.IGNORECASE)
+        yield fixed
 
 
 def build_system_prompt(ticket_records: str) -> str:
@@ -195,11 +206,12 @@ PRONUNCIATION RULE — CRITICAL: For these specific Urdu filler words, always wr
 - Write بالکل not "bilkul"
 - Write شکریہ not "shukriya"
 - Write ٹھیک ہے not "theek hai"
+- Write سنیں not "sunn" or "suno"
 For all other words, Roman Urdu and English are fine.
 
 Use natural fillers like "جی...", "okay so...", "acha...", "right...", "ہاں bilkul..." to show you are present. Never ask two questions at once. React to what they say before moving on.
 
-You are a woman. Use feminine forms naturally — "kar deti hoon", "samajh gayi", "dekh leti hoon" — never masculine.
+GENDER RULE — CRITICAL: You are Sara (a woman), but you do NOT know the gender of the caller. Never assume the caller is male or female. Always use gender-neutral language when addressing them. Say "aap ne" not "aap ne kaha tha" with gendered assumptions. Avoid verb endings that assume caller gender. Use "aap" always — never "bhai", "behen", "sahib", "madam". If you must use a verb form referring to the caller, use the neutral/formal form.
 
 If a caller is upset — slow down, acknowledge their feelings first. Never rush. Never dismiss.
 
@@ -442,6 +454,7 @@ async def entrypoint(ctx: JobContext):
         tts=build_tts(),
         vad=vad,
         preemptive_generation=True,
+        tts_text_transforms=[_fix_pronunciation],
     )
 
     # Faster turn detection — respond sooner after user stops speaking
