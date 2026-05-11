@@ -17,15 +17,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download the multilingual turn-detector model into the image.
-# This means the container starts instantly without a network fetch on boot.
-RUN python -c "\
-from huggingface_hub import snapshot_download; \
-snapshot_download(repo_id='livekit/turn-detector', local_files_only=False)"
-
-# Copy agent source
+# Copy agent source first so download-files can run
 COPY agent.py .
 COPY .env* ./
+
+# Pre-download turn-detector model files into the image layer
+# so the container never needs to fetch them at runtime
+RUN python agent.py download-files
 
 # LiveKit agents use the 'start' sub-command to connect to the cloud
 CMD ["python", "agent.py", "start"]
