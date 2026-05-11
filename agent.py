@@ -21,6 +21,11 @@ from livekit.agents import (
     MetricsCollectedEvent,
     metrics,
 )
+try:
+    from livekit.agents.voice import TurnHandlingOptions
+    HAS_TURN_HANDLING = True
+except ImportError:
+    HAS_TURN_HANDLING = False
 from livekit.agents import llm, tts
 from livekit.plugins import deepgram, openai as lk_openai, silero, elevenlabs
 
@@ -410,7 +415,10 @@ def build_tts():
 
 
 def prewarm(proc: agents.JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
+    proc.userdata["vad"] = silero.VAD.load(
+        min_silence_duration=0.25,   # default ~0.55s — shorter = faster response
+        activation_threshold=0.4,    # default 0.5 — more sensitive to speech start/end
+    )
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
@@ -436,6 +444,13 @@ async def entrypoint(ctx: JobContext):
         vad=vad,
         preemptive_generation=True,
     )
+
+    # Faster turn detection — respond sooner after user stops speaking
+    if HAS_TURN_HANDLING:
+        session_kwargs["turn_handling"] = TurnHandlingOptions(
+            min_delay=0.3,   # wait only 0.3s of silence before responding (default 0.5s)
+            max_delay=2.0,   # never wait more than 2s (default 3.0s)
+        )
 
     if MULTILINGUAL_TURN_DETECTION:
         logger.info("Turn detection: MultilingualModel")
