@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from datetime import date, datetime, timezone
 from typing import Annotated
 
@@ -145,8 +146,37 @@ async def fetch_tickets() -> str:
     )
 
 
+# ── TTS text sanitizer ────────────────────────────────────────────────────────
+
+def _sanitize_tts_text(text: str) -> str:
+    """
+    Strip markdown and inject SSML <break> tags so ElevenLabs pauses naturally.
+    Called automatically before every TTS synthesis via tts_text_transforms.
+    """
+    # Remove bullet points and list markers (- item, * item, • item, 1. item)
+    text = re.sub(r'^\s*[-*•]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*\d+[.)]\s+', '', text, flags=re.MULTILINE)
+    # Remove bold / italic markdown (**word**, *word*, __word__)
+    text = re.sub(r'\*{1,3}([^*\n]+)\*{1,3}', r'\1', text)
+    text = re.sub(r'_{1,2}([^_\n]+)_{1,2}', r'\1', text)
+    # Remove markdown headers (## Heading)
+    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
+    # Remove backtick code markers
+    text = re.sub(r'`+([^`]+)`+', r'\1', text)
+    # Inject SSML pauses at natural speech boundaries
+    text = re.sub(r'([,،])\s+', r'\1 <break time="200ms"/> ', text)   # comma
+    text = re.sub(r'([.!?])\s+', r'\1 <break time="400ms"/> ', text)  # sentence end
+    text = re.sub(r'\s*—\s*', ' <break time="300ms"/> ', text)        # em-dash
+    text = re.sub(r'\s+-\s+', ' <break time="200ms"/> ', text)        # spaced hyphen
+    # Clean up extra whitespace
+    text = ' '.join(text.split())
+    return text
+
+
 def build_system_prompt(ticket_records: str) -> str:
     return f"""You are Sara, a customer care voice agent for Daewoo Express Pakistan. You handle TWO types of requests — ticket inquiries AND complaints. Always figure out which one the caller needs first, before doing anything else.
+
+FORMATTING RULE — CRITICAL: You are speaking out loud. Never use bullet points, numbered lists, hyphens, asterisks, dashes, or any markdown formatting whatsoever. Never write lists. Always speak in natural, flowing, complete sentences the way a real person would talk. If you need to mention multiple things, connect them with words like "aur", "phir", "pehle" — never with hyphens or bullet points.
 
 SPEAK like a real Pakistani — natural Urdu mixed with English, short turns, warm and patient. Use fillers like 'ji...', 'haan...', 'achha...', 'bilkul...' to show you are present. Never ask two questions at once. React to what they say before moving on.
 
@@ -345,6 +375,19 @@ def build_tts():
                 voice_id=ELEVENLABS_VOICE_ID,
                 model="eleven_multilingual_v2",
                 api_key=ELEVENLABS_API_KEY,
+                # SSML enabled so <break> tags produce real pauses
+                enable_ssml_parsing=True,
+                # Voice tuning for natural South Asian conversational tone:
+                # stability 0.45 → natural emotional range (not robotic)
+                # similarity_boost 0.75 → stays true to the voice's accent
+                # style 0.20 → slight expressiveness for warmth
+                # use_speaker_boost → sharpens clarity on phone-quality audio
+                voice_settings=elevenlabs.VoiceSettings(
+                    stability=0.45,
+                    similarity_boost=0.75,
+                    style=0.20,
+                    use_speaker_boost=True,
+                ),
             ),
             lk_openai.TTS(model="tts-1", voice="nova"),
         ])
@@ -378,6 +421,8 @@ async def entrypoint(ctx: JobContext):
         tts=build_tts(),
         vad=vad,
         preemptive_generation=True,
+        # Strip markdown and inject SSML pauses before every TTS synthesis
+        tts_text_transforms=[_sanitize_tts_text],
     )
 
     if MULTILINGUAL_TURN_DETECTION:
